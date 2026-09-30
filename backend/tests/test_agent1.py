@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 import openpyxl
 
 from main import app
-from agents.sheet_intelligence import run_sheet_intelligence
+from agents.sheet_intelligence import run_sheet_intelligence, analyze_workbook
 from utils.excel_utils import load_workbook_from_path
 
 client = TestClient(app)
@@ -32,6 +32,12 @@ def test_excel_reading_and_sheet_detection():
     assert result.confidence >= 0.70
     assert "Property Data" in result.reasoning
 
+def test_analyze_workbook_interface():
+    """Test analyze_workbook interface with file path."""
+    result = analyze_workbook(SAMPLE_EXCEL_PATH)
+    assert result.selected_sheet == "Property Data"
+    assert result.header_row == 3
+
 def test_analyze_endpoint_with_valid_file():
     """Test POST /analyze endpoint with messy_sov.xlsx upload."""
     with open(SAMPLE_EXCEL_PATH, "rb") as f:
@@ -44,11 +50,11 @@ def test_analyze_endpoint_with_valid_file():
     assert data["header_row"] == 3
     assert data["confidence"] > 0.70
     assert isinstance(data["reasoning"], str)
-    assert len(data["all_sheets"]) >= 2
+    assert len(data["sheets"]) >= 2
 
 def test_analyze_endpoint_invalid_file():
     """Test POST /analyze endpoint with non-excel file returns 400."""
     files = {"file": ("test.txt", b"Hello World", "text/plain")}
     response = client.post("/analyze", files=files)
     assert response.status_code == 400
-    assert "Invalid file type" in response.json()["detail"]
+    assert "Invalid file extension" in response.json()["detail"]
