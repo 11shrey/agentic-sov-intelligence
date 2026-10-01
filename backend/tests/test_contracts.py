@@ -15,6 +15,7 @@ from models.schemas import (
 from models.state import pipeline_store, PipelineState
 
 client = TestClient(app)
+SAMPLE_EXCEL_PATH = os.path.join(os.path.dirname(__file__), "..", "sample_data", "messy_sov.xlsx")
 
 
 def test_17_field_schema_validation():
@@ -54,7 +55,7 @@ def test_schema_mapping_recommendation_model():
         SchemaMappingRecommendation(
             source_column="Loc #",
             target_field="Reference",
-            confidence=1.5,  # invalid confidence > 1.0
+            confidence=1.5,
             matching_method="alias",
             reasoning="test",
             status="approved"
@@ -79,16 +80,13 @@ def test_data_quality_issue_model():
 
 def test_human_review_decision_validation():
     """Verify HumanReviewDecision validation rules."""
-    # Valid accept decision
     d1 = HumanReviewDecision(recommendation_id="rec_1", decision="accept")
     assert d1.decision == "accept"
 
-    # Valid edit decision with edited_value
     d2 = HumanReviewDecision(recommendation_id="rec_2", decision="edit", edited_value="Y")
     assert d2.decision == "edit"
     assert d2.edited_value == "Y"
 
-    # Invalid edit decision without edited_value (must raise ValidationError)
     with pytest.raises(ValidationError, match="edited_value is required when decision is 'edit'"):
         HumanReviewDecision(recommendation_id="rec_3", decision="edit", edited_value=None)
 
@@ -139,21 +137,23 @@ def test_api_routes_availability():
     assert res_health.status_code == 200
 
     # /map
-    res_map = client.post("/map")
-    assert res_map.status_code == 501
-    assert res_map.json()["status"] == "not_implemented"
+    with open(SAMPLE_EXCEL_PATH, "rb") as f:
+        files = {"file": ("messy_sov.xlsx", f, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
+        res_map = client.post("/map", files=files)
+    assert res_map.status_code == 200
 
     # /quality
-    res_quality = client.post("/quality")
-    assert res_quality.status_code == 501
-    assert res_quality.json()["status"] == "not_implemented"
+    with open(SAMPLE_EXCEL_PATH, "rb") as f:
+        files = {"file": ("messy_sov.xlsx", f, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
+        res_quality = client.post("/quality", files=files)
+    assert res_quality.status_code == 200
 
-    # /review
+    # /review (Stub 501)
     res_review = client.post("/review", json={"decisions": [{"recommendation_id": "r1", "decision": "accept"}]})
     assert res_review.status_code == 501
     assert res_review.json()["status"] == "not_implemented"
 
-    # /transform
+    # /transform (Stub 501)
     res_transform = client.post("/transform")
     assert res_transform.status_code == 501
     assert res_transform.json()["status"] == "not_implemented"

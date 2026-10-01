@@ -1,6 +1,6 @@
 import os
 import io
-from typing import Union
+from typing import Union, List, Dict, Any
 from fastapi import FastAPI, UploadFile, File, HTTPException, status, Path
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,15 +9,20 @@ from models.schemas import (
     HealthResponse,
     NotImplementedResponse,
     SheetIntelligenceResult,
+    SchemaMappingRecommendation,
     SchemaMappingResponse,
     DataQualityResponse,
     HumanReviewRequest,
     HumanReviewResponse,
     TransformationResponse,
 )
+from models.sov_schema import STANDARD_SOV_FIELDS
 from models.state import pipeline_store, PipelineState
 from agents.sheet_intelligence import analyze_workbook
-from utils.excel_utils import save_uploaded_file, load_workbook_from_bytes, validate_excel_filename
+from agents.schema_mapping import map_schema
+from agents.data_quality import analyze_quality
+from pipeline.sov_pipeline import run_sov_pipeline, SOVPipelineResult
+from utils.excel_utils import save_uploaded_file, load_workbook_from_bytes, validate_excel_filename, extract_sheet_rows
 
 app = FastAPI(
     title="Agentic SOV Intelligence System API",
@@ -48,11 +53,20 @@ async def health_check():
     return HealthResponse(status="ok")
 
 
-@app.post("/analyze", response_model=SheetIntelligenceResult, tags=["Agent 1 - Sheet Intelligence"])
+@app.get("/schema", tags=["Schema"])
+async def get_standard_schema():
+    """Returns the central 17 Standard SOV Fields list."""
+    return {
+        "standard_fields": STANDARD_SOV_FIELDS,
+        "total_fields": len(STANDARD_SOV_FIELDS)
+    }
+
+
+@app.post("/analyze", response_model=SOVPipelineResult, tags=["Pipeline - Full Analysis"])
 async def analyze_sov_file(file: UploadFile = File(...)):
     """
-    Accepts an Excel (.xlsx) file upload, executes Agent 1 (Sheet Intelligence),
-    and initializes the pipeline state.
+    Accepts an Excel (.xlsx) file upload and runs the integrated Agents 1 -> 2 -> 3 pipeline.
+    Returns combined sheet_analysis, mappings, and quality_issues.
     """
     if not file.filename:
         raise HTTPException(
@@ -70,62 +84,68 @@ async def analyze_sov_file(file: UploadFile = File(...)):
 
     try:
         contents = await file.read()
-        saved_filename, saved_filepath = save_uploaded_file(contents, file.filename, UPLOADS_DIR)
+        save_uploaded_file(contents, file.filename, UPLOADS_DIR)
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to save uploaded file: {str(e)}"
+            detail=f"Failed to process file upload: {str(e)}"
         )
 
     try:
-        result = analyze_workbook(contents)
-        
-        # Update pipeline state
-        state = pipeline_store.get_state("default")
-        state.uploaded_filename = file.filename
-        state.saved_file_path = saved_filepath
-        state.selected_sheet = result.selected_sheet
-        state.header_row = result.header_row
-        state.sheet_analysis = result
-        pipeline_store.set_state(state)
-
-        return result
+        pipeline_result = run_sov_pipeline(contents, filename=file.filename)
+        return pipeline_result
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Sheet Intelligence analysis failed: {str(e)}"
+            detail=f"SOV Pipeline analysis failed: {str(e)}"
         )
 
 
-@app.post("/map", response_model=NotImplementedResponse, status_code=status.HTTP_501_NOT_IMPLEMENTED, tags=["Agent 2 - Schema Mapping"])
-async def map_schema_endpoint():
+@app.post("/map", response_model=SchemaMappingResponse, tags=["Agent 2 - Schema Mapping"])
+async def map_schema_endpoint(file: UploadFile = File(...)):
     """
-    API contract endpoint for Agent 2 (Schema Mapping).
-    Returns status 501 Not Implemented until Agent 2 logic is built.
+    Accepts an Excel file upload and runs Agent 2 (Schema Mapping).
     """
-    return NotImplementedResponse(
-        status="not_implemented",
-        message="Schema Mapping agent (Agent 2) is not implemented yet."
-    )
+    if not file.filename:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Filename cannot be empty.")
+    
+    try:
+        contents = await file.read()
+        sheet_analysis = analyze_workbook(contents)
+        wb = load_workbook_from_bytes(contents)
+        rows = extract_sheet_rows(wb[sheet_analysis.selected_sheet], max_rows=100)
+        res = map_schema(rows, header_row=sheet_analysis.header_row)
+        res.selected_sheet = sheet_analysis.selected_sheet
+        return res
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Schema mapping failed: {str(e)}")
 
 
-@app.post("/quality", response_model=NotImplementedResponse, status_code=status.HTTP_501_NOT_IMPLEMENTED, tags=["Agent 3 - Data Quality"])
-async def data_quality_endpoint():
+@app.post("/quality", response_model=DataQualityResponse, tags=["Agent 3 - Data Quality"])
+async def data_quality_endpoint(file: UploadFile = File(...)):
     """
-    API contract endpoint for Agent 3 (Data Quality & Reasoning).
-    Returns status 501 Not Implemented until Agent 3 logic is built.
+    Accepts an Excel file upload and runs Agent 3 (Data Quality & Reasoning).
     """
-    return NotImplementedResponse(
-        status="not_implemented",
-        message="Data Quality & Reasoning agent (Agent 3) is not implemented yet."
-    )
+    if not file.filename:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Filename cannot be empty.")
+
+    try:
+        contents = await file.read()
+        sheet_analysis = analyze_workbook(contents)
+        wb = load_workbook_from_bytes(contents)
+        rows = extract_sheet_rows(wb[sheet_analysis.selected_sheet], max_rows=1000)
+        mapping_res = map_schema(rows, header_row=sheet_analysis.header_row)
+        quality_res = analyze_quality(rows, header_row=sheet_analysis.header_row, approved_mappings=mapping_res.mappings)
+        return quality_res
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Data quality analysis failed: {str(e)}")
 
 
 @app.post("/review", response_model=NotImplementedResponse, status_code=status.HTTP_501_NOT_IMPLEMENTED, tags=["Human Approval"])
 async def human_review_endpoint(request: HumanReviewRequest):
     """
     API contract endpoint for Human Review Decisions.
-    Validates decision input and updates state once Agent 4 is ready.
+    Returns 501 Not Implemented until Agent 4 is ready.
     """
     return NotImplementedResponse(
         status="not_implemented",
@@ -137,7 +157,7 @@ async def human_review_endpoint(request: HumanReviewRequest):
 async def transform_endpoint():
     """
     API contract endpoint for Agent 4 (Controlled Transformation).
-    Returns status 501 Not Implemented until Agent 4 logic is built.
+    Returns 501 Not Implemented until Agent 4 is built.
     """
     return NotImplementedResponse(
         status="not_implemented",
@@ -150,7 +170,6 @@ async def download_file(filename: str = Path(..., description="Target output fil
     """
     Downloads generated output files (Cleaned_SOV.xlsx or Audit_Log.xlsx) from backend/outputs.
     """
-    # Sanitize filename to prevent directory traversal
     safe_filename = os.path.basename(filename)
     file_path = os.path.join(OUTPUTS_DIR, safe_filename)
 

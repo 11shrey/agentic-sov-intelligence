@@ -46,11 +46,12 @@ def test_analyze_endpoint_with_valid_file():
 
     assert response.status_code == 200
     data = response.json()
-    assert data["selected_sheet"] == "Property Data"
-    assert data["header_row"] == 3
-    assert data["confidence"] > 0.70
-    assert isinstance(data["reasoning"], str)
-    assert len(data["sheets"]) >= 2
+    sheet_data = data.get("sheet_analysis", data)
+    assert sheet_data["selected_sheet"] == "Property Data"
+    assert sheet_data["header_row"] == 3
+    assert sheet_data["confidence"] > 0.70
+    assert isinstance(sheet_data["reasoning"], str)
+    assert len(sheet_data["sheets"]) >= 2
 
 def test_analyze_endpoint_invalid_file():
     """Test POST /analyze endpoint with non-excel file returns 400."""
