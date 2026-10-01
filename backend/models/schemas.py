@@ -33,7 +33,6 @@ class SheetIntelligenceResult(BaseModel):
     @classmethod
     def sync_sheet_lists(cls, data: Any) -> Any:
         if isinstance(data, dict):
-            # Synchronize 'sheets' and 'all_sheets' if only one is provided
             if "all_sheets" in data and "sheets" not in data:
                 data["sheets"] = data["all_sheets"]
             elif "sheets" in data and "all_sheets" not in data:
@@ -46,7 +45,7 @@ class SchemaMappingRecommendation(BaseModel):
     source_column: str
     target_field: str
     confidence: float = Field(..., ge=0.0, le=1.0)
-    matching_method: str  # e.g., "exact", "alias", "normalized", "fuzzy"
+    matching_method: str  # e.g., "exact", "alias", "normalized", "fuzzy", "default"
     reasoning: str
     status: Literal["approved", "rejected", "needs_review"] = "needs_review"
 
@@ -72,9 +71,10 @@ class DataQualityResponse(BaseModel):
 # --- D. Human Review Decision ---
 
 class HumanReviewDecision(BaseModel):
-    recommendation_id: str
+    recommendation_id: str  # maps to source_column or field name
     decision: Literal["accept", "reject", "edit"]
     edited_value: Optional[Any] = None
+    approver: Optional[str] = "human"
 
     @model_validator(mode="after")
     def check_edited_value_required_for_edit(self):
@@ -84,11 +84,17 @@ class HumanReviewDecision(BaseModel):
         return self
 
 class HumanReviewRequest(BaseModel):
+    session_id: str = "default"
+    approver: Optional[str] = "Senior Underwriter"
     decisions: List[HumanReviewDecision]
 
 class HumanReviewResponse(BaseModel):
     status: str = "success"
     processed_decisions: int
+    accepted: int
+    rejected: int
+    edited: int
+    approver: str
 
 # --- E. Audit Record ---
 
@@ -99,11 +105,32 @@ class AuditRecord(BaseModel):
     after_value: Optional[Any] = None
     transformation: str
     confidence: float = Field(..., ge=0.0, le=1.0)
-    approval_status: str
+    approval_status: str  # "approved", "rejected", "edited"
     approver: str = "human"
     timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
+# --- F. Transformation & Dashboard Metrics ---
+
+class DashboardMetrics(BaseModel):
+    total_records: int
+    total_source_columns: int
+    mapped_columns: int
+    unmapped_columns: int
+    quality_issues: int
+    high_severity_issues: int
+    recommendations: int
+    accepted: int
+    rejected: int
+    edited: int
+    transformations_applied: int
+    output_records: int
+
 class TransformationResponse(BaseModel):
+    status: str = "success"
+    message: str = "Controlled transformation completed successfully."
     cleaned_sov_filename: str
     audit_log_filename: str
-    total_records_processed: int
+    cleaned_sov_download_url: str
+    audit_log_download_url: str
+    metrics: DashboardMetrics
+    preview_rows: List[Dict[str, Any]] = Field(default_factory=list)

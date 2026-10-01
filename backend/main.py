@@ -1,13 +1,13 @@
 import os
 import io
 from typing import Union, List, Dict, Any
-from fastapi import FastAPI, UploadFile, File, HTTPException, status, Path
+from fastapi import FastAPI, UploadFile, File, HTTPException, status, Path, Body
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from models.schemas import (
     HealthResponse,
-    NotImplementedResponse,
     SheetIntelligenceResult,
     SchemaMappingRecommendation,
     SchemaMappingResponse,
@@ -15,12 +15,14 @@ from models.schemas import (
     HumanReviewRequest,
     HumanReviewResponse,
     TransformationResponse,
+    DashboardMetrics,
 )
 from models.sov_schema import STANDARD_SOV_FIELDS
 from models.state import pipeline_store, PipelineState
 from agents.sheet_intelligence import analyze_workbook
 from agents.schema_mapping import map_schema
 from agents.data_quality import analyze_quality
+from agents.controlled_transformation import transform_data
 from pipeline.sov_pipeline import run_sov_pipeline, SOVPipelineResult
 from utils.excel_utils import save_uploaded_file, load_workbook_from_bytes, validate_excel_filename, extract_sheet_rows
 
@@ -93,6 +95,12 @@ async def analyze_sov_file(file: UploadFile = File(...)):
 
     try:
         pipeline_result = run_sov_pipeline(contents, filename=file.filename)
+        
+        # Keep raw file_bytes in state for transformation stage
+        state = pipeline_store.get_state("default")
+        state.file_bytes = contents
+        pipeline_store.set_state(state)
+
         return pipeline_result
     except Exception as e:
         raise HTTPException(
@@ -141,28 +149,86 @@ async def data_quality_endpoint(file: UploadFile = File(...)):
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Data quality analysis failed: {str(e)}")
 
 
-@app.post("/review", response_model=NotImplementedResponse, status_code=status.HTTP_501_NOT_IMPLEMENTED, tags=["Human Approval"])
+@app.post("/review", response_model=HumanReviewResponse, tags=["Human Approval"])
 async def human_review_endpoint(request: HumanReviewRequest):
     """
-    API contract endpoint for Human Review Decisions.
-    Returns 501 Not Implemented until Agent 4 is ready.
+    Accepts human review decisions (accept, reject, edit) and stores them in pipeline state.
     """
-    return NotImplementedResponse(
-        status="not_implemented",
-        message="Human Review processing is ready for Agent 4 integration."
+    state = pipeline_store.get_state(request.session_id)
+    if not state.sheet_analysis:
+        sample_path = os.path.join(BASE_DIR, "sample_data", "messy_sov.xlsx")
+        if os.path.exists(sample_path):
+            with open(sample_path, "rb") as f:
+                run_sov_pipeline(f.read(), filename="messy_sov.xlsx", session_id=request.session_id)
+            state = pipeline_store.get_state(request.session_id)
+
+    state.human_decisions = request.decisions
+    if request.approver:
+        state.approver = request.approver
+    pipeline_store.set_state(state)
+
+    accepted_cnt = len([d for d in request.decisions if d.decision == "accept"])
+    rejected_cnt = len([d for d in request.decisions if d.decision == "reject"])
+    edited_cnt = len([d for d in request.decisions if d.decision == "edit"])
+
+    return HumanReviewResponse(
+        status="success",
+        processed_decisions=len(request.decisions),
+        accepted=accepted_cnt,
+        rejected=rejected_cnt,
+        edited=edited_cnt,
+        approver=request.approver or state.approver
     )
 
 
-@app.post("/transform", response_model=NotImplementedResponse, status_code=status.HTTP_501_NOT_IMPLEMENTED, tags=["Agent 4 - Controlled Transformation"])
-async def transform_endpoint():
+@app.post("/transform", response_model=TransformationResponse, tags=["Agent 4 - Controlled Transformation"])
+async def transform_endpoint(session_id: str = Body(default="default", embed=True)):
     """
-    API contract endpoint for Agent 4 (Controlled Transformation).
-    Returns 501 Not Implemented until Agent 4 is built.
+    Executes Agent 4 (Controlled Transformation).
+    Applies ONLY approved human decisions and deterministic standardization rules.
+    Produces Cleaned_SOV.xlsx and Audit_Log.xlsx.
     """
-    return NotImplementedResponse(
-        status="not_implemented",
-        message="Controlled Transformation agent (Agent 4) is not implemented yet."
-    )
+    state = pipeline_store.get_state(session_id)
+
+    if not state.sheet_analysis or not state.file_bytes:
+        sample_path = os.path.join(BASE_DIR, "sample_data", "messy_sov.xlsx")
+        if os.path.exists(sample_path):
+            with open(sample_path, "rb") as f:
+                contents = f.read()
+                run_sov_pipeline(contents, filename="messy_sov.xlsx", session_id=session_id)
+                state = pipeline_store.get_state(session_id)
+                state.file_bytes = contents
+
+    if not state.file_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No workbook data found in session state. Please analyze an Excel file first."
+        )
+
+    try:
+        wb = load_workbook_from_bytes(state.file_bytes)
+        raw_rows = extract_sheet_rows(wb[state.selected_sheet], max_rows=1000)
+
+        response = transform_data(
+            raw_sheet_rows=raw_rows,
+            header_row=state.header_row,
+            mappings=state.schema_mappings,
+            quality_issues=state.quality_issues,
+            human_decisions=state.human_decisions,
+            approver=state.approver,
+            output_dir=OUTPUTS_DIR
+        )
+
+        state.cleaned_sov_filename = response.cleaned_sov_filename
+        state.audit_log_filename = response.audit_log_filename
+        pipeline_store.set_state(state)
+
+        return response
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Controlled Transformation failed: {str(e)}"
+        )
 
 
 @app.get("/download/{filename}", tags=["Downloads"])
@@ -184,6 +250,11 @@ async def download_file(filename: str = Path(..., description="Target output fil
         filename=safe_filename,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
+# Mount frontend dist static files if available
+FRONTEND_DIST_DIR = os.path.join(os.path.dirname(BASE_DIR), "frontend", "dist")
+if os.path.exists(FRONTEND_DIST_DIR):
+    app.mount("/", StaticFiles(directory=FRONTEND_DIST_DIR, html=True), name="frontend")
 
 if __name__ == "__main__":
     import uvicorn

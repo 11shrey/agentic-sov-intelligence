@@ -14,6 +14,7 @@ class PipelineState(BaseModel):
     saved_file_path: Optional[str] = None
     selected_sheet: Optional[str] = None
     header_row: Optional[int] = None
+    approver: str = "Senior Underwriter"
     sheet_analysis: Optional[SheetIntelligenceResult] = None
     schema_mappings: List[SchemaMappingRecommendation] = Field(default_factory=list)
     quality_issues: List[DataQualityIssue] = Field(default_factory=list)
@@ -21,6 +22,11 @@ class PipelineState(BaseModel):
     audit_records: List[AuditRecord] = Field(default_factory=list)
     cleaned_sov_filename: Optional[str] = None
     audit_log_filename: Optional[str] = None
+    file_bytes: Optional[bytes] = None
+
+    def get_decision_map(self) -> Dict[str, HumanReviewDecision]:
+        """Returns map of recommendation_id (source column / field) to decision object."""
+        return {d.recommendation_id.strip().lower(): d for d in self.human_decisions}
 
 class PipelineStore:
     """In-memory state storage abstraction. Easily swappable with Redis/SQL later."""

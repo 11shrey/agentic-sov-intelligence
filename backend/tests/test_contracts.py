@@ -131,7 +131,7 @@ def test_pipeline_state_store():
 
 
 def test_api_routes_availability():
-    """Verify availability of all API endpoints and 501 Not Implemented stubs."""
+    """Verify availability of all active API endpoints."""
     # /health
     res_health = client.get("/health")
     assert res_health.status_code == 200
@@ -148,15 +148,15 @@ def test_api_routes_availability():
         res_quality = client.post("/quality", files=files)
     assert res_quality.status_code == 200
 
-    # /review (Stub 501)
-    res_review = client.post("/review", json={"decisions": [{"recommendation_id": "r1", "decision": "accept"}]})
-    assert res_review.status_code == 501
-    assert res_review.json()["status"] == "not_implemented"
+    # /review
+    res_review = client.post("/review", json={"decisions": [{"recommendation_id": "Loc #", "decision": "accept"}]})
+    assert res_review.status_code == 200
+    assert res_review.json()["status"] == "success"
 
-    # /transform (Stub 501)
-    res_transform = client.post("/transform")
-    assert res_transform.status_code == 501
-    assert res_transform.json()["status"] == "not_implemented"
+    # /transform
+    res_transform = client.post("/transform", json={"session_id": "default"})
+    assert res_transform.status_code == 200
+    assert res_transform.json()["status"] == "success"
 
     # /download/nonexistent.xlsx
     res_download = client.get("/download/nonexistent.xlsx")
