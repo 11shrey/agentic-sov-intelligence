@@ -25,12 +25,19 @@ from agents.sheet_intelligence import analyze_workbook
 from agents.schema_mapping import map_schema
 from agents.data_quality import analyze_quality
 from agents.controlled_transformation import transform_data
-from pipeline.sov_pipeline import run_sov_pipeline, SOVPipelineResult
-from utils.excel_utils import save_uploaded_file, load_workbook_from_bytes, validate_excel_filename, extract_sheet_rows
+from pipeline.sov_pipeline import run_sov_pipeline, run_agent1_agent2, SOVPipelineResult
+from utils.excel_utils import (
+    save_uploaded_file,
+    load_workbook_from_bytes,
+    validate_excel_filename,
+    extract_sheet_rows,
+    load_csv_rows_from_bytes,
+    load_all_sheets_from_bytes
+)
 
 app = FastAPI(
     title="Agentic SOV Intelligence System API",
-    description="Backend pipeline for automated, human-approved SOV processing and data transformation.",
+    description="Backend pipeline for automated, human-approved SOV processing and data transformation supporting Excel (.xlsx, .xls, .xlsm), OpenDocument (.ods), Delimited (.csv, .tsv), and PDF (.pdf) files.",
     version="1.0.0"
 )
 
@@ -69,7 +76,7 @@ async def get_standard_schema():
 @app.post("/analyze", response_model=SOVPipelineResult, tags=["Pipeline - Full Analysis"])
 async def analyze_sov_file(file: UploadFile = File(...)):
     """
-    Accepts an Excel (.xlsx) file upload and runs the integrated Agents 1 -> 2 -> 3 pipeline.
+    Accepts an Excel (.xlsx, .xls, .xlsm), OpenDocument (.ods), Delimited (.csv, .tsv), or PDF (.pdf) file upload and runs the integrated Agents 1 -> 2 -> 3 pipeline.
     Returns combined sheet_analysis, mappings, and quality_issues.
     """
     if not file.filename:
@@ -126,7 +133,7 @@ async def analyze_sov_file(file: UploadFile = File(...)):
 @app.post("/map", response_model=SchemaMappingResponse, tags=["Agent 2 - Schema Mapping"])
 async def map_schema_endpoint(file: UploadFile = File(...)):
     """
-    Accepts an Excel file upload and executes Agent 2 (Schema Mapping).
+    Accepts an Excel (.xlsx, .xls, .xlsm), OpenDocument (.ods), Delimited (.csv, .tsv), or PDF (.pdf) file upload and executes Agent 2 (Schema Mapping).
     """
     if not file.filename:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Filename cannot be empty.")
@@ -140,12 +147,9 @@ async def map_schema_endpoint(file: UploadFile = File(...)):
         contents = await file.read()
         if not contents or len(contents) == 0:
             raise ValueError("Uploaded file is empty (0 bytes).")
-        sheet_analysis = analyze_workbook(contents)
-        wb = load_workbook_from_bytes(contents)
-        rows = extract_sheet_rows(wb[sheet_analysis.selected_sheet], max_rows=100)
-        res = map_schema(rows, header_row=sheet_analysis.header_row)
-        res.selected_sheet = sheet_analysis.selected_sheet
-        return res
+        
+        _, mapping_res = run_agent1_agent2(contents, filename=file.filename, max_rows=1000)
+        return mapping_res
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
@@ -155,7 +159,7 @@ async def map_schema_endpoint(file: UploadFile = File(...)):
 @app.post("/quality", response_model=DataQualityResponse, tags=["Agent 3 - Data Quality"])
 async def data_quality_endpoint(file: UploadFile = File(...)):
     """
-    Accepts an Excel file upload and executes Agent 3 (Data Quality & Reasoning).
+    Accepts an Excel (.xlsx, .xls, .xlsm), OpenDocument (.ods), Delimited (.csv, .tsv), or PDF (.pdf) file upload and executes Agent 3 (Data Quality & Reasoning).
     """
     if not file.filename:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Filename cannot be empty.")
@@ -169,9 +173,11 @@ async def data_quality_endpoint(file: UploadFile = File(...)):
         contents = await file.read()
         if not contents or len(contents) == 0:
             raise ValueError("Uploaded file is empty (0 bytes).")
-        sheet_analysis = analyze_workbook(contents)
-        wb = load_workbook_from_bytes(contents)
-        rows = extract_sheet_rows(wb[sheet_analysis.selected_sheet], max_rows=1000)
+        
+        sheet_analysis = analyze_workbook(contents, filename=file.filename)
+        sheets_data = load_all_sheets_from_bytes(contents, filename=file.filename, max_rows=1000)
+        rows = sheets_data.get(sheet_analysis.selected_sheet, list(sheets_data.values())[0] if sheets_data else [])
+
         mapping_res = map_schema(rows, header_row=sheet_analysis.header_row)
         quality_res = analyze_quality(rows, header_row=sheet_analysis.header_row, approved_mappings=mapping_res.mappings)
         return quality_res
@@ -239,8 +245,8 @@ async def transform_endpoint(request: TransformRequest = Body(default_factory=Tr
         )
 
     try:
-        wb = load_workbook_from_bytes(state.file_bytes)
-        raw_rows = extract_sheet_rows(wb[state.selected_sheet], max_rows=1000)
+        sheets_data = load_all_sheets_from_bytes(state.file_bytes, filename=state.uploaded_filename, max_rows=1000)
+        raw_rows = sheets_data.get(state.selected_sheet, list(sheets_data.values())[0] if sheets_data else [])
 
         response = transform_data(
             raw_sheet_rows=raw_rows,
@@ -257,6 +263,8 @@ async def transform_endpoint(request: TransformRequest = Body(default_factory=Tr
         pipeline_store.set_state(state)
 
         return response
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

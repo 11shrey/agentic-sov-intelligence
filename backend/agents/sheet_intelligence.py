@@ -1,8 +1,17 @@
-from typing import Dict, List, Any, Tuple, Union
+from typing import Dict, List, Any, Tuple, Union, Optional
+import os
+import re
 import openpyxl
 from openpyxl.worksheet.worksheet import Worksheet
 from models.schemas import SheetIntelligenceResult, SheetSummary
-from utils.excel_utils import extract_sheet_rows, get_sheet_dimensions, load_workbook_from_bytes, load_workbook_from_path
+from utils.excel_utils import (
+    extract_sheet_rows,
+    get_sheet_dimensions,
+    load_workbook_from_bytes,
+    load_workbook_from_path,
+    load_csv_rows_from_bytes,
+    load_csv_rows_from_path
+)
 
 SOV_HEADER_KEYWORDS = [
     "loc", "location", "ref", "reference", "address", "premises", "street", 
@@ -48,9 +57,14 @@ def analyze_sheet_header(rows: List[List[Any]]) -> Tuple[int, float, List[str]]:
         for cell_str in string_cells:
             cell_lower = cell_str.lower()
             for kw in SOV_HEADER_KEYWORDS:
-                if kw in cell_lower:
-                    matched_keywords.append(cell_str)
-                    break
+                if len(kw) <= 3:
+                    if re.search(r'\b' + re.escape(kw) + r'\b', cell_lower):
+                        matched_keywords.append(cell_str)
+                        break
+                else:
+                    if kw in cell_lower:
+                        matched_keywords.append(cell_str)
+                        break
 
         header_width = len(non_empty_cells)
         # Title block penalty: Single cell or tiny cell count rows with few matches
@@ -74,28 +88,23 @@ def analyze_sheet_header(rows: List[List[Any]]) -> Tuple[int, float, List[str]]:
     return best_row_idx, max(0.0, best_score), best_matches
 
 
-def run_sheet_intelligence(wb: openpyxl.Workbook) -> SheetIntelligenceResult:
+def evaluate_sheets_data(sheets_data: Dict[str, List[List[Any]]]) -> SheetIntelligenceResult:
     """
-    Evaluates all sheets in the workbook to identify the primary SOV sheet and its header row.
-    Guarantees original workbook immutability.
+    Core evaluation engine that scores one or more sheets/tables, detects the primary SOV table and header row,
+    and returns SheetIntelligenceResult.
     """
-    if wb is None:
-        raise ValueError("Workbook input cannot be None.")
-
-    sheet_names = wb.sheetnames
-    if not sheet_names:
+    if not sheets_data:
         raise ValueError("Workbook contains no sheets.")
 
     sheet_summaries: List[SheetSummary] = []
     sheet_scores: Dict[str, float] = {}
     sheet_header_info: Dict[str, Tuple[int, List[str]]] = {}
 
-    for name in sheet_names:
-        sheet: Worksheet = wb[name]
-        max_row, max_col = get_sheet_dimensions(sheet)
-        rows = extract_sheet_rows(sheet, max_rows=50)
-
+    for name, rows in sheets_data.items():
+        max_row = len(rows)
+        max_col = max(len(r) for r in rows) if rows else 0
         sample_rows = rows[:5]
+
         sheet_summaries.append(
             SheetSummary(
                 sheet_name=name,
@@ -113,8 +122,7 @@ def run_sheet_intelligence(wb: openpyxl.Workbook) -> SheetIntelligenceResult:
             title_bonus -= 10.0
 
         header_row, h_score, matched_kws = analyze_sheet_header(rows)
-        
-        # Only award size bonus if there are matched SOV keywords or positive title keywords
+
         if matched_kws or title_bonus > 0:
             data_rows_count = max(0, max_row - header_row)
             size_bonus = min(5.0, data_rows_count * 0.5) if max_row > 1 else 0.0
@@ -135,7 +143,6 @@ def run_sheet_intelligence(wb: openpyxl.Workbook) -> SheetIntelligenceResult:
     selected_header_row, matched_kws = sheet_header_info[selected_sheet]
     selected_score = sheet_scores[selected_sheet]
 
-    # Validate if a valid SOV sheet was detected
     if selected_score <= 0.0:
         raise ValueError("No valid Statement of Values (SOV) sheet detected in workbook.")
 
@@ -157,21 +164,64 @@ def run_sheet_intelligence(wb: openpyxl.Workbook) -> SheetIntelligenceResult:
     )
 
 
-def analyze_workbook(file_input: Union[openpyxl.Workbook, bytes, str]) -> SheetIntelligenceResult:
+def run_sheet_intelligence(wb: openpyxl.Workbook) -> SheetIntelligenceResult:
     """
-    Main entry point for Agent 1. Accepts openpyxl Workbook, raw bytes, or file path string.
+    Evaluates all sheets in an openpyxl workbook. Guarantees original workbook immutability.
+    """
+    if wb is None:
+        raise ValueError("Workbook input cannot be None.")
+    if not wb.sheetnames:
+        raise ValueError("Workbook contains no sheets.")
+    sheets_data = {name: extract_sheet_rows(wb[name], max_rows=50) for name in wb.sheetnames}
+    return evaluate_sheets_data(sheets_data)
+
+
+def run_csv_intelligence(
+    csv_input: Union[bytes, str],
+    sheet_name: str = "CSV Data",
+    max_rows: int = 1000,
+    max_cols: int = 100
+) -> SheetIntelligenceResult:
+    """
+    Evaluates CSV tabular data as a single logical sheet.
+    """
+    if csv_input is None:
+        raise ValueError("CSV input cannot be None.")
+    if isinstance(csv_input, bytes):
+        rows = load_csv_rows_from_bytes(csv_input, max_rows=max_rows, max_cols=max_cols)
+    elif isinstance(csv_input, str):
+        rows = load_csv_rows_from_path(csv_input, max_rows=max_rows, max_cols=max_cols)
+    else:
+        raise ValueError(f"Unsupported CSV input type: {type(csv_input)}")
+    return evaluate_sheets_data({sheet_name: rows})
+
+
+def analyze_workbook(
+    file_input: Union[openpyxl.Workbook, bytes, str],
+    filename: Optional[str] = None
+) -> SheetIntelligenceResult:
+    """
+    Main entry point for Agent 1. Accepts openpyxl Workbook, raw bytes, or file path string
+    supporting .xlsx, .xls, .xlsm, .ods, .csv, .tsv, and .pdf files.
     """
     if file_input is None:
         raise ValueError("File input cannot be None.")
 
     if isinstance(file_input, openpyxl.Workbook):
         return run_sheet_intelligence(file_input)
-    elif isinstance(file_input, bytes):
-        wb = load_workbook_from_bytes(file_input)
-        return run_sheet_intelligence(wb)
     elif isinstance(file_input, str):
-        wb = load_workbook_from_path(file_input)
-        return run_sheet_intelligence(wb)
+        fname = filename or os.path.basename(file_input)
+        from utils.excel_utils import load_all_sheets_from_bytes
+        with open(file_input, "rb") as f:
+            file_bytes = f.read()
+        sheets_data = load_all_sheets_from_bytes(file_bytes, filename=fname)
+        return evaluate_sheets_data(sheets_data)
+    elif isinstance(file_input, bytes):
+        fname = filename or "uploaded_sov.xlsx"
+        from utils.excel_utils import load_all_sheets_from_bytes
+        sheets_data = load_all_sheets_from_bytes(file_input, filename=fname)
+        return evaluate_sheets_data(sheets_data)
     else:
         raise ValueError(f"Unsupported file_input type: {type(file_input)}")
+
 

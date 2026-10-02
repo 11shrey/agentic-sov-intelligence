@@ -53,11 +53,11 @@ def test_corrupt_excel_upload():
     assert "corrupted" in response.json()["detail"].lower() or "invalid" in response.json()["detail"].lower()
 
 
-# 4. Non-Excel content
+# 4. Non-supported file format content
 def test_non_excel_extension_upload():
     response = client.post(
         "/analyze",
-        files={"file": ("document.pdf", b"%PDF-1.4 dummy", "application/pdf")}
+        files={"file": ("document.docx", b"PK\x03\x04 dummy docx content", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")}
     )
     assert response.status_code == 400
     assert "Invalid file extension" in response.json()["detail"]
@@ -65,14 +65,7 @@ def test_non_excel_extension_upload():
 
 # 5. Workbook with no sheets
 def test_workbook_with_no_sheets():
-    wb = openpyxl.Workbook()
-    # Remove all sheets
-    for sheetname in list(wb.sheetnames):
-        wb.remove(wb[sheetname])
-    
-    buf = io.BytesIO()
-    # openpyxl requires at least one sheet to save, so mock load_workbook_from_bytes
-    with patch("pipeline.sov_pipeline.load_workbook_from_bytes", return_value=wb):
+    with patch("utils.excel_utils.load_all_sheets_from_bytes", return_value={}):
         response = client.post(
             "/analyze",
             files={"file": ("no_sheets.xlsx", b"dummy_content", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
