@@ -8,12 +8,14 @@ from fastapi.staticfiles import StaticFiles
 
 from models.schemas import (
     HealthResponse,
+    SchemaDefinitionResponse,
     SheetIntelligenceResult,
     SchemaMappingRecommendation,
     SchemaMappingResponse,
     DataQualityResponse,
     HumanReviewRequest,
     HumanReviewResponse,
+    TransformRequest,
     TransformationResponse,
     DashboardMetrics,
 )
@@ -51,17 +53,17 @@ os.makedirs(OUTPUTS_DIR, exist_ok=True)
 
 @app.get("/health", response_model=HealthResponse, tags=["Health"])
 async def health_check():
-    """Health check endpoint to verify backend status."""
+    """Health check endpoint to verify backend API status."""
     return HealthResponse(status="ok")
 
 
-@app.get("/schema", tags=["Schema"])
+@app.get("/schema", response_model=SchemaDefinitionResponse, tags=["Schema"])
 async def get_standard_schema():
-    """Returns the central 17 Standard SOV Fields list."""
-    return {
-        "standard_fields": STANDARD_SOV_FIELDS,
-        "total_fields": len(STANDARD_SOV_FIELDS)
-    }
+    """Returns the central 17 Standard SOV Fields schema definition."""
+    return SchemaDefinitionResponse(
+        standard_fields=STANDARD_SOV_FIELDS,
+        total_fields=len(STANDARD_SOV_FIELDS)
+    )
 
 
 @app.post("/analyze", response_model=SOVPipelineResult, tags=["Pipeline - Full Analysis"])
@@ -96,7 +98,7 @@ async def analyze_sov_file(file: UploadFile = File(...)):
     try:
         pipeline_result = run_sov_pipeline(contents, filename=file.filename)
         
-        # Keep raw file_bytes in state for transformation stage
+        # Store raw file bytes in session state for downstream Agent 4 transformation
         state = pipeline_store.get_state("default")
         state.file_bytes = contents
         pipeline_store.set_state(state)
@@ -112,11 +114,16 @@ async def analyze_sov_file(file: UploadFile = File(...)):
 @app.post("/map", response_model=SchemaMappingResponse, tags=["Agent 2 - Schema Mapping"])
 async def map_schema_endpoint(file: UploadFile = File(...)):
     """
-    Accepts an Excel file upload and runs Agent 2 (Schema Mapping).
+    Accepts an Excel file upload and executes Agent 2 (Schema Mapping).
     """
     if not file.filename:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Filename cannot be empty.")
     
+    try:
+        validate_excel_filename(file.filename)
+    except ValueError as err:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(err))
+
     try:
         contents = await file.read()
         sheet_analysis = analyze_workbook(contents)
@@ -132,10 +139,15 @@ async def map_schema_endpoint(file: UploadFile = File(...)):
 @app.post("/quality", response_model=DataQualityResponse, tags=["Agent 3 - Data Quality"])
 async def data_quality_endpoint(file: UploadFile = File(...)):
     """
-    Accepts an Excel file upload and runs Agent 3 (Data Quality & Reasoning).
+    Accepts an Excel file upload and executes Agent 3 (Data Quality & Reasoning).
     """
     if not file.filename:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Filename cannot be empty.")
+
+    try:
+        validate_excel_filename(file.filename)
+    except ValueError as err:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(err))
 
     try:
         contents = await file.read()
@@ -182,12 +194,13 @@ async def human_review_endpoint(request: HumanReviewRequest):
 
 
 @app.post("/transform", response_model=TransformationResponse, tags=["Agent 4 - Controlled Transformation"])
-async def transform_endpoint(session_id: str = Body(default="default", embed=True)):
+async def transform_endpoint(request: TransformRequest = Body(default_factory=TransformRequest)):
     """
     Executes Agent 4 (Controlled Transformation).
     Applies ONLY approved human decisions and deterministic standardization rules.
     Produces Cleaned_SOV.xlsx and Audit_Log.xlsx.
     """
+    session_id = request.session_id
     state = pipeline_store.get_state(session_id)
 
     if not state.sheet_analysis or not state.file_bytes:

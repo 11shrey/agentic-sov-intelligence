@@ -7,6 +7,10 @@ from models.sov_schema import STANDARD_SOV_FIELDS, is_valid_sov_field
 class HealthResponse(BaseModel):
     status: str = "ok"
 
+class SchemaDefinitionResponse(BaseModel):
+    standard_fields: List[str]
+    total_fields: int
+
 class NotImplementedResponse(BaseModel):
     status: str = "not_implemented"
     message: str
@@ -110,6 +114,9 @@ class AuditRecord(BaseModel):
     timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 # --- F. Transformation & Dashboard Metrics ---
+
+class TransformRequest(BaseModel):
+    session_id: str = "default"
 
 class DashboardMetrics(BaseModel):
     total_records: int

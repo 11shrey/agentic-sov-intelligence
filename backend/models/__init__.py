@@ -1,6 +1,7 @@
 from models.sov_schema import STANDARD_SOV_FIELDS, StandardSOVField, is_valid_sov_field
 from models.schemas import (
     HealthResponse,
+    SchemaDefinitionResponse,
     NotImplementedResponse,
     SheetSummary,
     SheetIntelligenceResult,
@@ -12,7 +13,9 @@ from models.schemas import (
     HumanReviewRequest,
     HumanReviewResponse,
     AuditRecord,
+    TransformRequest,
     TransformationResponse,
+    DashboardMetrics,
 )
 
 __all__ = [
@@ -20,6 +23,7 @@ __all__ = [
     "StandardSOVField",
     "is_valid_sov_field",
     "HealthResponse",
+    "SchemaDefinitionResponse",
     "NotImplementedResponse",
     "SheetSummary",
     "SheetIntelligenceResult",
@@ -31,5 +35,7 @@ __all__ = [
     "HumanReviewRequest",
     "HumanReviewResponse",
     "AuditRecord",
+    "TransformRequest",
     "TransformationResponse",
+    "DashboardMetrics",
 ]
