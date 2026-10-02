@@ -66,7 +66,8 @@ def get_sheet_dimensions(sheet: Worksheet) -> Tuple[int, int]:
 def extract_sheet_rows(sheet: Worksheet, max_rows: int = 50) -> List[List[Any]]:
     """Extract top N rows from a sheet as raw python lists of values."""
     rows = []
-    for row in sheet.iter_rows(max_row=max_rows, values_only=True):
+    effective_max = min(sheet.max_row or 1, max_rows) if sheet.max_row else max_rows
+    for row in sheet.iter_rows(max_row=effective_max, values_only=True):
         row_values = []
         for val in row:
             if val is None:

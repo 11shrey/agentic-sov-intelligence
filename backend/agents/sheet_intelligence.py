@@ -10,13 +10,19 @@ SOV_HEADER_KEYWORDS = [
     "country", "bldg", "building", "value", "repl cost", "replacement cost", 
     "contents", "bi", "business income", "occupancy", "use", "construction", 
     "const", "stories", "storeys", "year built", "yr built", "fire", 
-    "sprinkler", "fire prot", "protection"
+    "sprinkler", "fire prot", "protection", "limit", "premium", "tiv",
+    "total insured value", "square feet", "sqft", "sq ft"
 ]
 
-POSITIVE_SHEET_KEYWORDS = ["property", "sov", "schedule", "values", "location", "premises", "data", "building", "asset"]
-NEGATIVE_SHEET_KEYWORDS = ["instruction", "summary", "cover", "meta", "readme", "config", "notes", "index", "template", "guidance"]
+POSITIVE_SHEET_KEYWORDS = ["property", "sov", "schedule", "values", "location", "premises", "data", "building", "asset", "locations", "properties", "statement"]
+NEGATIVE_SHEET_KEYWORDS = ["instruction", "summary", "cover", "meta", "readme", "config", "notes", "index", "template", "guidance", "toc", "instructions", "help"]
+
 
 def analyze_sheet_header(rows: List[List[Any]]) -> Tuple[int, float, List[str]]:
+    """
+    Analyzes top rows of a sheet to detect the header row index (1-based), header score, and matched SOV keywords.
+    Scans up to top 20 rows and handles title blocks, metadata, and blank rows.
+    """
     if not rows:
         return 1, 0.0, []
 
@@ -24,7 +30,7 @@ def analyze_sheet_header(rows: List[List[Any]]) -> Tuple[int, float, List[str]]:
     best_score = -1.0
     best_matches: List[str] = []
 
-    max_check_rows = min(15, len(rows))
+    max_check_rows = min(20, len(rows))
 
     for idx in range(max_check_rows):
         row = rows[idx]
@@ -46,13 +52,19 @@ def analyze_sheet_header(rows: List[List[Any]]) -> Tuple[int, float, List[str]]:
                     matched_keywords.append(cell_str)
                     break
 
-        score = (len(matched_keywords) * 3.0) + (len(string_cells) * 0.5) - (len(numeric_cells) * 2.0)
+        header_width = len(non_empty_cells)
+        # Title block penalty: Single cell or tiny cell count rows with few matches
+        if header_width <= 2 and len(matched_keywords) <= 1:
+            score = -2.0 + (len(matched_keywords) * 1.0)
+        else:
+            score = (len(matched_keywords) * 4.0) + (len(string_cells) * 1.0) - (len(numeric_cells) * 2.5)
 
+        # Look ahead for data row indicators below
         if idx + 1 < len(rows):
             next_row = rows[idx + 1]
             next_non_empty = [c for c in next_row if c is not None and str(c).strip() != ""]
-            if len(next_non_empty) >= len(non_empty_cells) * 0.5:
-                score += 2.0
+            if len(next_non_empty) >= max(2, len(non_empty_cells) * 0.4):
+                score += 3.0
 
         if score > best_score:
             best_score = score
@@ -63,6 +75,13 @@ def analyze_sheet_header(rows: List[List[Any]]) -> Tuple[int, float, List[str]]:
 
 
 def run_sheet_intelligence(wb: openpyxl.Workbook) -> SheetIntelligenceResult:
+    """
+    Evaluates all sheets in the workbook to identify the primary SOV sheet and its header row.
+    Guarantees original workbook immutability.
+    """
+    if wb is None:
+        raise ValueError("Workbook input cannot be None.")
+
     sheet_names = wb.sheetnames
     if not sheet_names:
         raise ValueError("Workbook contains no sheets.")
@@ -95,9 +114,12 @@ def run_sheet_intelligence(wb: openpyxl.Workbook) -> SheetIntelligenceResult:
 
         header_row, h_score, matched_kws = analyze_sheet_header(rows)
         data_rows_count = max(0, max_row - header_row)
-        size_bonus = min(5.0, data_rows_count * 0.5)
+        size_bonus = min(5.0, data_rows_count * 0.5) if max_row > 1 else 0.0
 
         total_sheet_score = title_bonus + h_score + size_bonus
+        if not matched_kws and any(kw in name_lower for kw in NEGATIVE_SHEET_KEYWORDS):
+            total_sheet_score -= 10.0
+
         sheet_scores[name] = total_sheet_score
         sheet_header_info[name] = (header_row, matched_kws)
 
@@ -105,10 +127,11 @@ def run_sheet_intelligence(wb: openpyxl.Workbook) -> SheetIntelligenceResult:
     selected_header_row, matched_kws = sheet_header_info[selected_sheet]
     selected_score = sheet_scores[selected_sheet]
 
-    if selected_score <= 0:
-        confidence = 0.30
-    else:
-        confidence = min(0.98, max(0.50, round(0.50 + (selected_score / 25.0), 2)))
+    # Validate if a valid SOV sheet was detected
+    if selected_score <= 0.0:
+        raise ValueError("No valid Statement of Values (SOV) sheet detected in workbook.")
+
+    confidence = min(0.98, max(0.50, round(0.50 + (selected_score / 25.0), 2)))
 
     kw_list_str = ", ".join([f"'{k}'" for k in matched_kws[:5]]) if matched_kws else "property records"
     reasoning = (
@@ -127,6 +150,12 @@ def run_sheet_intelligence(wb: openpyxl.Workbook) -> SheetIntelligenceResult:
 
 
 def analyze_workbook(file_input: Union[openpyxl.Workbook, bytes, str]) -> SheetIntelligenceResult:
+    """
+    Main entry point for Agent 1. Accepts openpyxl Workbook, raw bytes, or file path string.
+    """
+    if file_input is None:
+        raise ValueError("File input cannot be None.")
+
     if isinstance(file_input, openpyxl.Workbook):
         return run_sheet_intelligence(file_input)
     elif isinstance(file_input, bytes):
@@ -136,4 +165,5 @@ def analyze_workbook(file_input: Union[openpyxl.Workbook, bytes, str]) -> SheetI
         wb = load_workbook_from_path(file_input)
         return run_sheet_intelligence(wb)
     else:
-        raise TypeError(f"Unsupported file_input type: {type(file_input)}")
+        raise ValueError(f"Unsupported file_input type: {type(file_input)}")
+
