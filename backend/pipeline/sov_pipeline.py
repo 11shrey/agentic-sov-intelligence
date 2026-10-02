@@ -37,7 +37,7 @@ def run_sov_pipeline(
     elif isinstance(file_input, str):
         wb = load_workbook_from_path(file_input)
     else:
-        raise TypeError(f"Unsupported file_input type: {type(file_input)}")
+        raise ValueError(f"Unsupported file_input type: {type(file_input)}")
 
     # 2. Run Agent 1: Sheet Intelligence
     sheet_analysis = analyze_workbook(wb)

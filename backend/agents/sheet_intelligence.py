@@ -113,12 +113,20 @@ def run_sheet_intelligence(wb: openpyxl.Workbook) -> SheetIntelligenceResult:
             title_bonus -= 10.0
 
         header_row, h_score, matched_kws = analyze_sheet_header(rows)
-        data_rows_count = max(0, max_row - header_row)
-        size_bonus = min(5.0, data_rows_count * 0.5) if max_row > 1 else 0.0
+        
+        # Only award size bonus if there are matched SOV keywords or positive title keywords
+        if matched_kws or title_bonus > 0:
+            data_rows_count = max(0, max_row - header_row)
+            size_bonus = min(5.0, data_rows_count * 0.5) if max_row > 1 else 0.0
+        else:
+            size_bonus = 0.0
 
         total_sheet_score = title_bonus + h_score + size_bonus
         if not matched_kws and any(kw in name_lower for kw in NEGATIVE_SHEET_KEYWORDS):
             total_sheet_score -= 10.0
+
+        if not matched_kws and title_bonus <= 0:
+            total_sheet_score = 0.0
 
         sheet_scores[name] = total_sheet_score
         sheet_header_info[name] = (header_row, matched_kws)

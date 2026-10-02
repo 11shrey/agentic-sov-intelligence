@@ -88,7 +88,14 @@ async def analyze_sov_file(file: UploadFile = File(...)):
 
     try:
         contents = await file.read()
+        if not contents or len(contents) == 0:
+            raise ValueError("Uploaded file is empty (0 bytes).")
         save_uploaded_file(contents, file.filename, UPLOADS_DIR)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -104,6 +111,11 @@ async def analyze_sov_file(file: UploadFile = File(...)):
         pipeline_store.set_state(state)
 
         return pipeline_result
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -126,12 +138,16 @@ async def map_schema_endpoint(file: UploadFile = File(...)):
 
     try:
         contents = await file.read()
+        if not contents or len(contents) == 0:
+            raise ValueError("Uploaded file is empty (0 bytes).")
         sheet_analysis = analyze_workbook(contents)
         wb = load_workbook_from_bytes(contents)
         rows = extract_sheet_rows(wb[sheet_analysis.selected_sheet], max_rows=100)
         res = map_schema(rows, header_row=sheet_analysis.header_row)
         res.selected_sheet = sheet_analysis.selected_sheet
         return res
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Schema mapping failed: {str(e)}")
 
@@ -151,12 +167,16 @@ async def data_quality_endpoint(file: UploadFile = File(...)):
 
     try:
         contents = await file.read()
+        if not contents or len(contents) == 0:
+            raise ValueError("Uploaded file is empty (0 bytes).")
         sheet_analysis = analyze_workbook(contents)
         wb = load_workbook_from_bytes(contents)
         rows = extract_sheet_rows(wb[sheet_analysis.selected_sheet], max_rows=1000)
         mapping_res = map_schema(rows, header_row=sheet_analysis.header_row)
         quality_res = analyze_quality(rows, header_row=sheet_analysis.header_row, approved_mappings=mapping_res.mappings)
         return quality_res
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Data quality analysis failed: {str(e)}")
 

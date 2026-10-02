@@ -45,6 +45,8 @@ def save_uploaded_file(file_bytes: bytes, original_filename: str, target_dir: st
 
 def load_workbook_from_bytes(file_bytes: bytes) -> openpyxl.Workbook:
     """Load an openpyxl workbook safely from bytes."""
+    if not file_bytes or len(file_bytes) == 0:
+        raise ValueError("Uploaded file is empty (0 bytes).")
     try:
         return openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
     except Exception as e:
@@ -54,6 +56,8 @@ def load_workbook_from_path(file_path: str) -> openpyxl.Workbook:
     """Load an openpyxl workbook safely from a file path."""
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"Excel file not found at path: {file_path}")
+    if os.path.getsize(file_path) == 0:
+        raise ValueError(f"Excel file at '{file_path}' is empty (0 bytes).")
     try:
         return openpyxl.load_workbook(file_path, data_only=True)
     except Exception as e:
@@ -61,13 +65,18 @@ def load_workbook_from_path(file_path: str) -> openpyxl.Workbook:
 
 def get_sheet_dimensions(sheet: Worksheet) -> Tuple[int, int]:
     """Return max_row and max_column for a worksheet."""
+    if sheet is None:
+        return 0, 0
     return sheet.max_row or 0, sheet.max_column or 0
 
-def extract_sheet_rows(sheet: Worksheet, max_rows: int = 50) -> List[List[Any]]:
-    """Extract top N rows from a sheet as raw python lists of values."""
+def extract_sheet_rows(sheet: Worksheet, max_rows: int = 50, max_cols: int = 100) -> List[List[Any]]:
+    """Extract top N rows and M columns from a sheet as raw python lists of values."""
+    if sheet is None:
+        return []
     rows = []
-    effective_max = min(sheet.max_row or 1, max_rows) if sheet.max_row else max_rows
-    for row in sheet.iter_rows(max_row=effective_max, values_only=True):
+    effective_max_row = min(sheet.max_row or 1, max_rows) if sheet.max_row else max_rows
+    effective_max_col = min(sheet.max_column or 1, max_cols) if sheet.max_column else max_cols
+    for row in sheet.iter_rows(max_row=effective_max_row, max_col=effective_max_col, values_only=True):
         row_values = []
         for val in row:
             if val is None:
