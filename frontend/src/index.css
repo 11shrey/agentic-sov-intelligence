@@ -1,0 +1,45 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-slate-950 text-slate-100 font-sans antialiased selection:bg-teal-500 selection:text-slate-950;
+  }
+}
+
+.glass-card {
+  background: rgba(15, 23, 42, 0.75);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(51, 65, 85, 0.5);
+}
+
+.gradient-text {
+  background: linear-gradient(135deg, #38bdf8 0%, #2dd4bf 50%, #818cf8 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.btn-primary {
+  @apply bg-gradient-to-r from-teal-500 to-emerald-600 hover:from-teal-400 hover:to-emerald-500 text-slate-950 font-semibold px-5 py-2.5 rounded-lg shadow-lg shadow-teal-500/20 transition-all duration-200 active:scale-95 disabled:opacity-50 disabled:pointer-events-none;
+}
+
+.btn-secondary {
+  @apply bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-medium px-4 py-2 rounded-lg transition-all duration-200 active:scale-95 disabled:opacity-50;
+}
+
+.badge-success {
+  @apply bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-xs font-semibold px-2.5 py-1 rounded-full;
+}
+
+.badge-warning {
+  @apply bg-amber-500/10 text-amber-400 border border-amber-500/20 text-xs font-semibold px-2.5 py-1 rounded-full;
+}
+
+.badge-danger {
+  @apply bg-rose-500/10 text-rose-400 border border-rose-500/20 text-xs font-semibold px-2.5 py-1 rounded-full;
+}
+
+.badge-info {
+  @apply bg-sky-500/10 text-sky-400 border border-sky-500/20 text-xs font-semibold px-2.5 py-1 rounded-full;
+}
